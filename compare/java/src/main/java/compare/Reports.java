@@ -11,7 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -63,19 +62,78 @@ final class Reports {
 
     static void writeHtml(List<Row> rows, Path path, Map<String, String> metadata) throws IOException {
         Map<String, Integer> counts = counts(rows);
-        LinkedHashSet<String> groups = new LinkedHashSet<String>();
+        Map<String, Integer> groupCounts = new LinkedHashMap<String, Integer>();
         for (Row row : rows) {
-            groups.add(row.group);
+            Integer n = groupCounts.get(row.group);
+            groupCounts.put(row.group, Integer.valueOf((n == null ? 0 : n.intValue()) + 1));
         }
 
-        StringBuilder cards = new StringBuilder();
+        int total = rows.size();
+        int matched = 0;
+        for (String status : Status.MATCHED) {
+            matched += nz(counts.get(status));
+        }
+        int problems = problemCount(counts);
+        String rate = total == 0 ? "0.0%"
+                : String.format(Locale.ROOT, "%.1f%%", Double.valueOf(100.0 * matched / total));
+
+        String[][] stats = {
+                {"Total Comparisons", String.valueOf(total)},
+                {"Matched", String.valueOf(matched)},
+                {"Needs Attention", String.valueOf(problems)},
+                {"Match Rate", rate},
+        };
+        StringBuilder statCards = new StringBuilder();
+        for (String[] stat : stats) {
+            statCards.append("<div class=\"stat\"><span class=\"label\">").append(esc(stat[0]))
+                    .append("</span><span class=\"num\">").append(esc(stat[1]))
+                    .append("</span></div>");
+        }
+
+        StringBuilder chips = new StringBuilder();
         for (String status : Status.ORDER) {
-            Integer count = counts.get(status);
-            int n = count == null ? 0 : count.intValue();
-            String color = Status.COLORS.get(status);
-            cards.append("<button class=\"card\" data-status=\"").append(status).append("\">")
-                    .append("<b style=\"color:").append(color).append("\">").append(n).append("</b>")
+            chips.append("<button class=\"chip\" data-status=\"").append(status)
+                    .append("\" style=\"--tone:").append(Status.COLORS.get(status)).append("\">")
+                    .append("<b>").append(nz(counts.get(status))).append("</b>")
                     .append("<span>").append(status.replace('_', ' ')).append("</span></button>");
+        }
+
+        StringBuilder tabs = new StringBuilder();
+        tabs.append("<button class=\"tab is-active\" data-group=\"*\">All Groups <em>")
+                .append(total).append("</em></button>");
+        for (Map.Entry<String, Integer> entry : groupCounts.entrySet()) {
+            tabs.append("<button class=\"tab\" data-group=\"").append(esc(entry.getKey()))
+                    .append("\">").append(esc(entry.getKey())).append(" <em>")
+                    .append(entry.getValue()).append("</em></button>");
+        }
+
+        String views = "<button class=\"view is-active\" data-view=\"all\"><i class=\"dot\"></i>"
+                + "All Rows (" + total + ")</button>"
+                + "<button class=\"view\" data-view=\"matched\"><i class=\"dot\"></i>"
+                + "Matched (" + matched + ")</button>"
+                + "<button class=\"view\" data-view=\"problems\"><i class=\"dot\"></i>"
+                + "Needs Attention (" + problems + ")</button>";
+
+        String notice;
+        if (problems > 0) {
+            StringBuilder breakdown = new StringBuilder();
+            for (String status : Status.PROBLEMS) {
+                int n = nz(counts.get(status));
+                if (n == 0) {
+                    continue;
+                }
+                if (breakdown.length() > 0) {
+                    breakdown.append(", ");
+                }
+                breakdown.append(n).append(' ')
+                        .append(status.replace('_', ' ').toLowerCase(Locale.ROOT));
+            }
+            notice = "<div class=\"notice warn\"><b>Attention:</b> " + problems + " of " + total
+                    + " comparisons need review (" + breakdown + "). "
+                    + "Use the group tabs or status filters below to drill in.</div>";
+        } else {
+            notice = "<div class=\"notice ok\"><b>Clean run:</b> no mismatches and no "
+                    + "unmatched rows across all mapped comparisons.</div>";
         }
 
         StringBuilder body = new StringBuilder();
@@ -97,11 +155,11 @@ final class Reports {
                     .append(esc(row.group)).append("\" data-hay=\"").append(esc(haystack))
                     .append("\" data-values='").append(esc(raw)).append("'>")
                     .append("<td>").append(esc(row.group)).append("</td>")
-                    .append("<td class=\"mono\">").append(esc(row.key)).append("</td>")
+                    .append("<td class=\"mono\">").append(empty(row.key)).append("</td>")
                     .append("<td class=\"mono\">").append(esc(row.path)).append("</td>")
-                    .append("<td><span class=\"tag\" style=\"color:").append(color)
-                    .append(";border-color:").append(color).append("\">")
-                    .append(esc(row.status)).append("</span></td>")
+                    .append("<td><span class=\"pill\" style=\"background:").append(color)
+                    .append("1a;color:").append(color).append(";border:1px solid ").append(color)
+                    .append("40\">").append(esc(row.status)).append("</span></td>")
                     .append("<td class=\"mono value\">").append(empty(row.jsonValue)).append("</td>")
                     .append("<td class=\"mono value\">").append(empty(row.xmlMappedValue)).append("</td>")
                     .append("<td class=\"mono path\">").append(esc(row.jsonPath)).append("</td>")
@@ -109,64 +167,111 @@ final class Reports {
                     .append("<td class=\"detail\">").append(esc(row.detail)).append("</td></tr>");
         }
 
-        StringBuilder options = new StringBuilder();
-        for (String group : groups) {
-            options.append("<option value=\"").append(esc(group)).append("\">")
-                    .append(esc(group)).append("</option>");
-        }
-
         String title = metadata.get("name");
         String html = "<!doctype html>\n"
-                + "<html lang=\"en\"><head><meta charset=\"utf-8\">"
-                + "<meta name=\"viewport\" content=\"width=device-width\">\n"
-                + "<title>" + esc(title) + " comparison</title><style>" + CSS + "</style></head><body>\n"
-                + "<header><h1>JSON ↔ XML comparison — " + esc(title) + "</h1>\n"
-                + "<div class=\"meta\">JSON: " + esc(metadata.get("json"))
-                + " · XML: " + esc(metadata.get("xml"))
-                + " · Mapping: " + esc(metadata.get("mapping"))
-                + " · " + rows.size() + " comparisons"
-                + " · Generated: " + esc(metadata.get("generated")) + "</div></header>\n"
-                + "<main><div class=\"cards\">" + cards + "</div><div class=\"toolbar\">\n"
-                + "<input id=\"q\" type=\"search\" placeholder=\"Filter path, value, status…\">\n"
-                + "<select id=\"group\"><option value=\"*\">All groups</option>" + options + "</select>\n"
-                + "<button id=\"problems\">Only problems</button><button id=\"all\">Reset</button>\n"
-                + "<button id=\"csv\">Download filtered CSV</button>"
-                + "<span class=\"count\"><b id=\"shown\">0</b> shown</span>\n"
-                + "</div><div class=\"wrap\"><table><thead><tr><th>Group</th><th>Key</th><th>Path</th>\n"
-                + "<th>Status</th><th>JSON value</th><th>XML mapped value</th><th>JSON path</th>\n"
-                + "<th>XML path</th><th>Detail</th></tr></thead><tbody>" + body
-                + "</tbody></table></div>\n"
-                + "</main><script>" + JS + "</script></body></html>";
+                + "<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
+                + "<title>JSON &#8596; XML Validation Report &mdash; " + esc(title) + "</title>\n"
+                + "<style>" + Theme.CSS + "</style></head><body>\n"
+                + "<div class=\"page\">\n"
+                + "<header class=\"hero\">\n"
+                + "  <h1>JSON &#8596; XML Validation Report</h1>\n"
+                + "  <div class=\"sub\">Generated on " + esc(metadata.get("generated")) + "</div>\n"
+                + "  <div class=\"meta\">Mapping: " + esc(metadata.get("mapping"))
+                + "\n    &nbsp;|&nbsp; " + total + " mapped comparisons</div>\n"
+                + "</header>\n"
+                + "<nav class=\"tabs\">" + tabs + "</nav>\n"
+                + "<section class=\"panel\">\n"
+                + "  <h2>" + esc(title) + " &mdash; Field Comparison</h2>\n"
+                + "  <div class=\"stats\">" + statCards + "</div>\n"
+                + "  <div class=\"files\">\n"
+                + "    <span><b>JSON</b> " + esc(metadata.get("json")) + "</span>\n"
+                + "    <span><b>XML</b> " + esc(metadata.get("xml")) + "</span>\n"
+                + "  </div>\n"
+                + "</section>\n"
+                + "<div class=\"views\">" + views + "</div>\n"
+                + notice + "\n"
+                + "<div class=\"chips\">" + chips + "</div>\n"
+                + "<div class=\"toolbar\">\n"
+                + "  <input id=\"q\" type=\"search\""
+                + " placeholder=\"Filter by path, value, status or detail&hellip;\">\n"
+                + "  <button id=\"csv\" class=\"primary\">Download filtered CSV</button>\n"
+                + "  <button id=\"reset\">Reset filters</button>\n"
+                + "  <span class=\"count\"><b id=\"shown\">0</b> of " + total + " rows shown</span>\n"
+                + "</div>\n"
+                + "<h3 class=\"rows-title\">Comparison Rows</h3>\n"
+                + "<div class=\"wrap\"><table><thead><tr>\n"
+                + "<th>Group</th><th>Key</th><th>Path</th><th>Status</th><th>JSON Value</th>\n"
+                + "<th>XML Mapped Value</th><th>JSON Path</th><th>XML Path</th><th>Detail</th>\n"
+                + "</tr></thead><tbody>" + body + "</tbody></table></div>\n"
+                + "</div>\n"
+                + "<script>" + Theme.JS + "</script></body></html>";
         Files.write(path, html.getBytes(StandardCharsets.UTF_8));
     }
 
     static void writeBatchIndex(List<Map<String, Object>> results, Path path) throws IOException {
         StringBuilder table = new StringBuilder();
+        int totalRows = 0;
+        int totalProblems = 0;
         for (Map<String, Object> result : results) {
             @SuppressWarnings("unchecked")
             Map<String, Integer> counts = (Map<String, Integer>) result.get("counts");
-            int problems = 0;
-            for (String status : Status.PROBLEMS) {
-                Integer n = counts.get(status);
-                if (n != null) {
-                    problems += n.intValue();
-                }
+            int problems = problemCount(counts);
+            int matched = 0;
+            for (String status : Status.MATCHED) {
+                matched += nz(counts.get(status));
             }
+            totalProblems += problems;
+            totalRows += ((Number) result.get("total")).intValue();
+            String tone = problems > 0 ? "#dc2626" : "#16a34a";
             table.append("<tr><td><a href=\"").append(esc(String.valueOf(result.get("report"))))
                     .append("\">").append(esc(String.valueOf(result.get("name")))).append("</a></td>")
                     .append("<td>").append(result.get("total")).append("</td>")
-                    .append("<td>").append(nz(counts.get(Status.MISMATCH))).append("</td>")
-                    .append("<td>").append(problems).append("</td>")
+                    .append("<td><b style=\"color:").append(tone).append("\">")
+                    .append(nz(counts.get(Status.MISMATCH))).append("</b></td>")
+                    .append("<td><b style=\"color:").append(tone).append("\">")
+                    .append(problems).append("</b></td>")
                     .append("<td>").append(nz(counts.get(Status.MATCH))).append("</td>")
-                    .append("<td>").append(nz(counts.get(Status.NORMALIZED_MATCH))).append("</td></tr>");
+                    .append("<td>").append(nz(counts.get(Status.NORMALIZED_MATCH))).append("</td>")
+                    .append("<td>").append(matched).append("</td></tr>");
         }
-        String html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Comparison batch</title>\n"
-                + "<style>body{font:14px system-ui;background:#0b0f17;color:#e5e7eb;padding:30px}\n"
-                + "table{border-collapse:collapse;width:100%}th,td{padding:10px;border-bottom:1px solid #273044;\n"
-                + "text-align:left}a{color:#60a5fa}</style></head><body><h1>JSON ↔ XML comparison batch</h1>\n"
-                + "<table><tr><th>Pair</th><th>Comparisons</th><th>Mismatches</th><th>All problems</th>\n"
-                + "<th>Matches</th><th>Normalized matches</th></tr>"
-                + table + "</table></body></html>";
+
+        String[][] stats = {
+                {"Pairs Compared", String.valueOf(results.size())},
+                {"Total Comparisons", String.valueOf(totalRows)},
+                {"Needs Attention", String.valueOf(totalProblems)},
+        };
+        StringBuilder statCards = new StringBuilder();
+        for (String[] stat : stats) {
+            statCards.append("<div class=\"stat\"><span class=\"label\">").append(esc(stat[0]))
+                    .append("</span><span class=\"num\">").append(esc(stat[1]))
+                    .append("</span></div>");
+        }
+        String generated = java.time.OffsetDateTime.now()
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+
+        String html = "<!doctype html>\n"
+                + "<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
+                + "<title>JSON &#8596; XML Validation Batch</title>\n"
+                + "<style>" + Theme.CSS + "</style></head><body>\n"
+                + "<div class=\"page\">\n"
+                + "<header class=\"hero\">\n"
+                + "  <h1>JSON &#8596; XML Validation Batch</h1>\n"
+                + "  <div class=\"sub\">Generated on " + esc(generated) + "</div>\n"
+                + "  <div class=\"meta\">" + results.size() + " file pairs &nbsp;|&nbsp; "
+                + totalRows + " comparisons</div>\n"
+                + "</header>\n"
+                + "<section class=\"panel\">\n"
+                + "  <h2>Batch Summary</h2>\n"
+                + "  <div class=\"stats\">" + statCards + "</div>\n"
+                + "</section>\n"
+                + "<h3 class=\"rows-title\">Reports</h3>\n"
+                + "<div class=\"wrap\"><table><thead><tr>\n"
+                + "<th>Pair</th><th>Comparisons</th><th>Mismatches</th><th>Needs Attention</th>\n"
+                + "<th>Match</th><th>Normalized Match</th><th>Matched Total</th>\n"
+                + "</tr></thead><tbody>" + table + "</tbody></table></div>\n"
+                + "</div></body></html>";
         if (path.getParent() != null) {
             Files.createDirectories(path.getParent());
         }
@@ -241,64 +346,4 @@ final class Reports {
     private static int nz(Integer value) {
         return value == null ? 0 : value.intValue();
     }
-
-    private static final String CSS =
-            ":root{color-scheme:dark;--bg:#0b0f17;--panel:#121824;--line:#273044;--text:#e5e7eb;--muted:#8993a7}"
-            + "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);"
-            + "font:13px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}header{padding:20px 24px;"
-            + "border-bottom:1px solid var(--line);background:#0e1420;position:sticky;top:0;z-index:5}"
-            + "h1{font-size:19px;margin:0 0 5px}.meta{color:var(--muted);font-size:12px}"
-            + "main{padding:18px 24px 50px}.cards{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}"
-            + ".card{background:var(--panel);color:var(--text);border:1px solid var(--line);"
-            + "border-radius:9px;padding:9px 12px;text-align:left;cursor:pointer}.card.off{opacity:.3}"
-            + ".card b{font-size:20px;display:block}.card span{font-size:10px;color:var(--muted)}"
-            + ".toolbar{display:flex;gap:8px;margin:12px 0}.toolbar input,.toolbar select,.toolbar button{"
-            + "background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:8px 10px}"
-            + ".toolbar input{min-width:310px}.toolbar .count{color:var(--muted);padding:8px}"
-            + ".wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}"
-            + "table{border-collapse:collapse;width:100%;background:var(--panel)}th,td{padding:8px 10px;"
-            + "border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{position:sticky;top:0;"
-            + "background:#192131;color:var(--muted);font-size:10px;letter-spacing:.05em;text-transform:uppercase}"
-            + "tbody tr:hover{background:#172033}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
-            + "font-size:12px}.value{max-width:320px;overflow-wrap:anywhere}"
-            + ".path{color:#aeb8cd;max-width:230px;overflow-wrap:anywhere}"
-            + ".detail{color:var(--muted);max-width:260px;overflow-wrap:anywhere}"
-            + ".tag{border:1px solid;border-radius:12px;font-size:10px;font-weight:700;padding:2px 6px;white-space:nowrap}";
-
-    private static final String JS =
-            "const rows=[...document.querySelectorAll(\"tbody tr\")];"
-            + "const active=new Set([...document.querySelectorAll(\".card\")].map(x=>x.dataset.status));"
-            + "function filter(){"
-            + "  const q=document.querySelector(\"#q\").value.toLowerCase();"
-            + "  const group=document.querySelector(\"#group\").value;let shown=0;"
-            + "  for(const row of rows){"
-            + "    const visible=active.has(row.dataset.status)&&(group===\"*\"||row.dataset.group===group)"
-            + "      &&(!q||row.dataset.hay.includes(q));"
-            + "    row.hidden=!visible;if(visible)shown++;"
-            + "  } document.querySelector(\"#shown\").textContent=shown;"
-            + "}"
-            + "document.querySelectorAll(\".card\").forEach(card=>card.onclick=()=>{"
-            + "  const status=card.dataset.status;"
-            + "  if(active.has(status)){active.delete(status);card.classList.add(\"off\")}"
-            + "  else{active.add(status);card.classList.remove(\"off\")} filter();"
-            + "});"
-            + "document.querySelector(\"#q\").oninput=filter;"
-            + "document.querySelector(\"#group\").onchange=filter;"
-            + "document.querySelector(\"#problems\").onclick=()=>{"
-            + "  active.clear();[\"MISMATCH\",\"MISSING_IN_JSON\",\"MISSING_IN_XML\","
-            + "  \"UNMATCHED_JSON_ROW\",\"UNMATCHED_XML_ROW\"].forEach(x=>active.add(x));"
-            + "  document.querySelectorAll(\".card\").forEach(x=>x.classList.toggle(\"off\",!active.has(x.dataset.status)));"
-            + "  filter();"
-            + "};"
-            + "document.querySelector(\"#all\").onclick=()=>{"
-            + "  document.querySelectorAll(\".card\").forEach(x=>{active.add(x.dataset.status);x.classList.remove(\"off\")});"
-            + "  document.querySelector(\"#q\").value=\"\";document.querySelector(\"#group\").value=\"*\";filter();"
-            + "};"
-            + "document.querySelector(\"#csv\").onclick=()=>{"
-            + "  const header=[\"group\",\"key\",\"path\",\"status\",\"jsonValue\",\"xmlMappedValue\",\"jsonPath\",\"xmlPath\",\"detail\"];"
-            + "  const quote=v=>`\"${String(v).replaceAll('\"','\"\"')}\"`;"
-            + "  const data=[header,...rows.filter(x=>!x.hidden).map(x=>JSON.parse(x.dataset.values))];"
-            + "  const blob=new Blob([data.map(r=>r.map(quote).join(\",\")).join(\"\\n\")],{type:\"text/csv\"});"
-            + "  const a=document.createElement(\"a\");a.href=URL.createObjectURL(blob);a.download=\"filtered-report.csv\";a.click();"
-            + "};filter();";
 }

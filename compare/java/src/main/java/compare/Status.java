@@ -27,6 +27,10 @@ final class Status {
             MISMATCH, MISSING_IN_JSON, MISSING_IN_XML, UNMATCHED_JSON_ROW, UNMATCHED_XML_ROW
     ));
 
+    static final List<String> MATCHED = Collections.unmodifiableList(Arrays.asList(
+            MATCH, NORMALIZED_MATCH
+    ));
+
     static final Map<String, String> COLORS;
 
     static {
