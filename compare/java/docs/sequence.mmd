@@ -1,0 +1,69 @@
+sequenceDiagram
+  autonumber
+  actor User
+  participant CLI as CompareJsonXml.java<br/>run()
+  participant MapL as MappingLoader.java
+  participant MapF as mapping.yaml
+  participant JSON as deal.json
+  participant XML as deal.xml
+  participant Pair as CompareJsonXml.java<br/>runPair()
+  participant Eng as Engine.java
+  participant Paths as Paths.java
+  participant Row as Row.java
+  participant Rpt as Reports.java
+
+  User->>CLI: java -jar json-xml-compare.jar --json deal.json --xml deal.xml --mapping mapping.yaml --out report.html
+
+  CLI->>CLI: Cli.parse() - single pair, batch-dir or manifest CSV
+  CLI->>MapL: MappingLoader.load(mapping.yaml)
+  MapL->>MapF: Files.readAllBytes + SnakeYAML
+  MapF-->>MapL: JsonNode
+  MapL->>MapL: validate()
+  MapL-->>CLI: mapping
+
+  CLI->>Pair: runPair(json, xml, out, mapping, name)
+
+  Pair->>JSON: ObjectMapper.readTree()
+  JSON-->>Pair: JsonNode jsonRoot
+  Pair->>XML: DocumentBuilder.parse()
+  XML-->>Pair: Element xmlRoot
+
+  Pair->>Eng: Engine.compareDocuments(jsonRoot, xmlRoot, mapping)
+
+  loop each field in mapping.fields
+    Eng->>Paths: Paths.jsonValue(jsonRoot, field.json)
+    Paths-->>Eng: jsonData + resolved path
+    Eng->>Paths: Paths.xmlValue(xmlRoot, field.xml)
+    Paths-->>Eng: xmlData + resolved path
+    Eng->>Eng: Engine.compare - type, enum, tolerance, case
+    Note over Eng: Status.java: MATCH, NORMALIZED_MATCH, MISMATCH, MISSING_IN_JSON, MISSING_IN_XML, OPTIONAL_MISSING, ID_PAIR
+    Eng->>Row: new Row(...)
+  end
+
+  loop each collection in mapping.collections
+    Eng->>Paths: Paths.jsonValues(collection.json)
+    Eng->>Paths: Paths.xmlElements(collection.xml)
+    Note over Eng: index by join.json / join.xml, never by array position
+    alt key present on one side only
+      Eng->>Row: UNMATCHED_JSON_ROW or UNMATCHED_XML_ROW
+    else keys match
+      Eng->>Row: MATCH - row joined by business key
+      loop each collection field
+        Eng->>Paths: extract relative to the joined row
+        Eng->>Eng: Engine.compare(...)
+        Eng->>Row: new Row(...)
+      end
+    end
+  end
+
+  Eng-->>Pair: List of Row
+
+  Pair->>Rpt: Reports.writeAll(rows, report.html, metadata)
+  Rpt-->>User: report.html
+  Rpt-->>User: report.csv
+  Rpt-->>User: report.json
+
+  opt --batch-dir or --manifest
+    CLI->>Rpt: Reports.writeBatchIndex()
+    Rpt-->>User: out-dir/index.html
+  end

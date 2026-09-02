@@ -1,0 +1,43 @@
+flowchart TB
+  subgraph IN["inputs"]
+    J["deal.json"]
+    X["deal.xml"]
+    M["mapping.yaml"]
+    CLI["CompareJsonXml.java<br/>run()"]
+  end
+
+  CLI --> Pairs["JSON/XML pairs<br/>--json/--xml, --batch-dir, --manifest"]
+  M --> MapL["MappingLoader.java<br/>load + validate"]
+  Pairs --> Pair["CompareJsonXml.java<br/>runPair()"]
+  MapL --> Pair
+
+  J --> ParseJ["ObjectMapper.readTree()"]
+  X --> ParseX["DocumentBuilder.parse()"]
+  Pair --> ParseJ
+  Pair --> ParseX
+
+  ParseJ --> TreeJ["JsonNode jsonRoot"]
+  ParseX --> TreeX["Element xmlRoot"]
+
+  TreeJ --> Eng["Engine.java<br/>compareDocuments()"]
+  TreeX --> Eng
+  MapL --> Eng
+
+  subgraph ENG["Engine.java"]
+    Paths["Paths.java<br/>jsonValue / xmlValue"]
+    F["fields[]<br/>typed compare + enum"]
+    C["collections[]<br/>join on business key"]
+    Paths --> F
+    Paths --> C
+    F --> Rows["List&lt;Row&gt;"]
+    C --> Rows
+  end
+
+  Eng --> F
+  Eng --> C
+
+  Rows --> Rpt["Reports.java<br/>writeAll()"]
+  Rpt --> HTML["report.html"]
+  Rpt --> CSV["report.csv"]
+  Rpt --> JSON["report.json"]
+  Rpt -.-> IDX["batch only<br/>index.html"]
