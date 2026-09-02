@@ -15,3 +15,19 @@ If you do have Maven:
 mvn -q package
 java -jar target/json-xml-compare.jar --help
 ```
+
+## Source layout
+
+| File | Role |
+| --- | --- |
+| `CompareJsonXml.java` | CLI, pairing, batch driver |
+| `MappingLoader.java` | loads and validates `mapping.yaml` / `.json` |
+| `Paths.java` | JSON dot-path and XML XPath-like resolution |
+| `Engine.java` | field comparison, enum translation, collection joins |
+| `Coverage.java` | sweep for JSON/XML paths the mapping never reads |
+| `Reports.java` | HTML / CSV / JSON output |
+| `Theme.java` | report CSS + JS, generated from the Python constants |
+
+`Theme.java` is generated from `REPORT_CSS` / `REPORT_JS` in
+`../compare_json_xml.py`. Edit the styling there, then regenerate, otherwise
+the two implementations drift.

@@ -16,11 +16,14 @@ final class Status {
     static final String ID_PAIR = "ID_PAIR";
     static final String UNMATCHED_JSON_ROW = "UNMATCHED_JSON_ROW";
     static final String UNMATCHED_XML_ROW = "UNMATCHED_XML_ROW";
+    static final String UNMAPPED_IN_JSON = "UNMAPPED_IN_JSON";
+    static final String UNMAPPED_IN_XML = "UNMAPPED_IN_XML";
 
     static final List<String> ORDER = Collections.unmodifiableList(Arrays.asList(
             MISMATCH, MISSING_IN_XML, MISSING_IN_JSON,
             UNMATCHED_JSON_ROW, UNMATCHED_XML_ROW,
-            OPTIONAL_MISSING, ID_PAIR, NORMALIZED_MATCH, MATCH
+            OPTIONAL_MISSING, ID_PAIR, NORMALIZED_MATCH, MATCH,
+            UNMAPPED_IN_JSON, UNMAPPED_IN_XML
     ));
 
     static final List<String> PROBLEMS = Collections.unmodifiableList(Arrays.asList(
@@ -29,6 +32,15 @@ final class Status {
 
     static final List<String> MATCHED = Collections.unmodifiableList(Arrays.asList(
             MATCH, NORMALIZED_MATCH
+    ));
+
+    /**
+     * Coverage rows report data the mapping never looks at. They are
+     * informational: no comparison happened, so they count as neither matched
+     * nor problems.
+     */
+    static final List<String> COVERAGE = Collections.unmodifiableList(Arrays.asList(
+            UNMAPPED_IN_JSON, UNMAPPED_IN_XML
     ));
 
     static final Map<String, String> COLORS;
@@ -44,6 +56,8 @@ final class Status {
         colors.put(ID_PAIR, "#0891b2");
         colors.put(UNMATCHED_JSON_ROW, "#db2777");
         colors.put(UNMATCHED_XML_ROW, "#ea580c");
+        colors.put(UNMAPPED_IN_JSON, "#4f46e5");
+        colors.put(UNMAPPED_IN_XML, "#0284c7");
         COLORS = Collections.unmodifiableMap(colors);
     }
 

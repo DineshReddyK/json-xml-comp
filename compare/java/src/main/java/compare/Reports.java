@@ -17,6 +17,8 @@ import java.util.Map;
 
 final class Reports {
     private static final ObjectMapper MAPPER = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+    /** Row payloads are embedded in HTML attributes, so they stay compact. */
+    private static final ObjectMapper COMPACT = new ObjectMapper();
 
     private Reports() {}
 
@@ -74,15 +76,19 @@ final class Reports {
             matched += nz(counts.get(status));
         }
         int problems = problemCount(counts);
-        String rate = total == 0 ? "0.0%"
-                : String.format(Locale.ROOT, "%.1f%%", Double.valueOf(100.0 * matched / total));
+        int unmapped = coverageCount(counts);
+        int compared = total - unmapped;
+        String rate = compared == 0 ? "0.0%"
+                : String.format(Locale.ROOT, "%.1f%%", Double.valueOf(100.0 * matched / compared));
 
-        String[][] stats = {
-                {"Total Comparisons", String.valueOf(total)},
-                {"Matched", String.valueOf(matched)},
-                {"Needs Attention", String.valueOf(problems)},
-                {"Match Rate", rate},
-        };
+        List<String[]> stats = new ArrayList<String[]>();
+        stats.add(new String[] {"Comparisons", String.valueOf(compared)});
+        stats.add(new String[] {"Matched", String.valueOf(matched)});
+        stats.add(new String[] {"Needs Attention", String.valueOf(problems)});
+        stats.add(new String[] {"Match Rate", rate});
+        if (unmapped > 0) {
+            stats.add(new String[] {"Unmapped Fields", String.valueOf(unmapped)});
+        }
         StringBuilder statCards = new StringBuilder();
         for (String[] stat : stats) {
             statCards.append("<div class=\"stat\"><span class=\"label\">").append(esc(stat[0]))
@@ -107,12 +113,16 @@ final class Reports {
                     .append(entry.getValue()).append("</em></button>");
         }
 
-        String views = "<button class=\"view is-active\" data-view=\"all\"><i class=\"dot\"></i>"
-                + "All Rows (" + total + ")</button>"
+        String views = "<button class=\"view is-active\" data-view=\"compared\"><i class=\"dot\"></i>"
+                + "Compared (" + compared + ")</button>"
                 + "<button class=\"view\" data-view=\"matched\"><i class=\"dot\"></i>"
                 + "Matched (" + matched + ")</button>"
                 + "<button class=\"view\" data-view=\"problems\"><i class=\"dot\"></i>"
                 + "Needs Attention (" + problems + ")</button>";
+        if (unmapped > 0) {
+            views += "<button class=\"view\" data-view=\"coverage\"><i class=\"dot\"></i>"
+                    + "Unmapped (" + unmapped + ")</button>";
+        }
 
         String notice;
         if (problems > 0) {
@@ -128,12 +138,19 @@ final class Reports {
                 breakdown.append(n).append(' ')
                         .append(status.replace('_', ' ').toLowerCase(Locale.ROOT));
             }
-            notice = "<div class=\"notice warn\"><b>Attention:</b> " + problems + " of " + total
+            notice = "<div class=\"notice warn\"><b>Attention:</b> " + problems + " of " + compared
                     + " comparisons need review (" + breakdown + "). "
                     + "Use the group tabs or status filters below to drill in.</div>";
         } else {
             notice = "<div class=\"notice ok\"><b>Clean run:</b> no mismatches and no "
                     + "unmatched rows across all mapped comparisons.</div>";
+        }
+        if (unmapped > 0) {
+            notice += "<div class=\"notice info\"><b>Coverage:</b> "
+                    + nz(counts.get(Status.UNMAPPED_IN_JSON)) + " JSON path(s) and "
+                    + nz(counts.get(Status.UNMAPPED_IN_XML))
+                    + " XML path(s) are not declared in the mapping, "
+                    + "so they were never compared. See the Coverage group.</div>";
         }
 
         StringBuilder body = new StringBuilder();
@@ -148,7 +165,7 @@ final class Reports {
             values.add(row.jsonPath);
             values.add(row.xmlPath);
             values.add(row.detail);
-            String raw = MAPPER.writeValueAsString(values);
+            String raw = COMPACT.writeValueAsString(values);
             String haystack = String.join(" ", values).toLowerCase(Locale.ROOT);
             String color = Status.COLORS.get(row.status);
             body.append("<tr data-status=\"").append(esc(row.status)).append("\" data-group=\"")
@@ -178,7 +195,9 @@ final class Reports {
                 + "  <h1>JSON &#8596; XML Validation Report</h1>\n"
                 + "  <div class=\"sub\">Generated on " + esc(metadata.get("generated")) + "</div>\n"
                 + "  <div class=\"meta\">Mapping: " + esc(metadata.get("mapping"))
-                + "\n    &nbsp;|&nbsp; " + total + " mapped comparisons</div>\n"
+                + "\n    &nbsp;|&nbsp; " + compared + " mapped comparisons\n    "
+                + (unmapped > 0 ? "&nbsp;|&nbsp; " + unmapped + " undeclared paths" : "")
+                + "</div>\n"
                 + "</header>\n"
                 + "<nav class=\"tabs\">" + tabs + "</nav>\n"
                 + "<section class=\"panel\">\n"
@@ -301,6 +320,14 @@ final class Reports {
         return total;
     }
 
+    static int coverageCount(Map<String, Integer> counts) {
+        int total = 0;
+        for (String status : Status.COVERAGE) {
+            total += nz(counts.get(status));
+        }
+        return total;
+    }
+
     private static Path withSuffix(Path html, String suffix) {
         String name = html.getFileName().toString();
         int dot = name.lastIndexOf('.');
@@ -335,12 +362,15 @@ final class Reports {
         if (value == null) {
             return "";
         }
+        // Entities match Python's html.escape so both reports are byte-identical.
         return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                .replace("\"", "&quot;").replace("'", "&#39;");
+                .replace("\"", "&quot;").replace("'", "&#x27;");
     }
 
     private static String empty(String value) {
-        return value == null || value.isEmpty() ? "—" : esc(value);
+        return value == null || value.isEmpty()
+                ? "<span class=\"dash\">&mdash;</span>"
+                : esc(value);
     }
 
     private static int nz(Integer value) {

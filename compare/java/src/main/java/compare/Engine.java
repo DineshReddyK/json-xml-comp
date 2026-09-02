@@ -109,7 +109,7 @@ final class Engine {
                 }
                 return new String[] {
                     Status.NORMALIZED_MATCH,
-                    "numeric values are equal within tolerance " + tolerance
+                    "numeric values are equal within tolerance " + plain(tolerance)
                 };
             }
             return new String[] { Status.MISMATCH, "numeric delta: " + left.subtract(right) };
@@ -249,6 +249,14 @@ final class Engine {
             }
         }
         return rows;
+    }
+
+    /** Renders a tolerance the way Python's Decimal does, e.g. 0.00001 not 0.000010. */
+    private static String plain(BigDecimal value) {
+        BigDecimal stripped = value.stripTrailingZeros();
+        return stripped.scale() < 0
+                ? stripped.setScale(0).toPlainString()
+                : stripped.toPlainString();
     }
 
     private static BigDecimal decimalValue(Object value) {

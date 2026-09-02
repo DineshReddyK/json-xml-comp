@@ -8,6 +8,7 @@ import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -151,7 +152,7 @@ final class Paths {
                 return node.booleanValue() ? "true" : "false";
             }
             if (node.isNumber()) {
-                return node.numberValue().toString();
+                return number(node);
             }
             if (node.isTextual()) {
                 return node.asText();
@@ -166,6 +167,18 @@ final class Paths {
             return node.asText();
         }
         return String.valueOf(value);
+    }
+
+    /**
+     * Renders numbers the way Python does: plain digits with a trailing ".0"
+     * for whole floats, never scientific notation like 1.1985E7.
+     */
+    private static String number(JsonNode node) {
+        if (node.isIntegralNumber()) {
+            return node.numberValue().toString();
+        }
+        BigDecimal value = node.decimalValue().stripTrailingZeros();
+        return value.scale() <= 0 ? value.setScale(1).toPlainString() : value.toPlainString();
     }
 
     static boolean absent(Object value) {

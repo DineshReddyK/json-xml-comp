@@ -77,13 +77,14 @@ public final class CompareJsonXml {
                 Path output = batch
                         ? cli.outDir.resolve(name + ".html")
                         : cli.out;
-                List<Row> rows = runPair(jsonPath, xmlPath, output, mapping, name);
+                List<Row> rows = runPair(jsonPath, xmlPath, output, mapping, name, cli.coverage);
                 Map<String, Integer> counts = Reports.counts(rows);
                 int problems = Reports.problemCount(counts);
+                int unmapped = Reports.coverageCount(counts);
                 hasProblems |= problems > 0;
-                System.out.println(name + ": " + rows.size() + " comparisons, "
+                System.out.println(name + ": " + (rows.size() - unmapped) + " comparisons, "
                         + nz(counts.get(Status.MISMATCH)) + " mismatches, "
-                        + problems + " problems -> " + output);
+                        + problems + " problems, " + unmapped + " unmapped -> " + output);
                 Map<String, Object> result = new LinkedHashMap<String, Object>();
                 result.put("name", name);
                 result.put("report", output.getFileName().toString());
@@ -108,7 +109,7 @@ public final class CompareJsonXml {
     }
 
     static List<Row> runPair(Path jsonPath, Path xmlPath, Path outputHtml,
-                             JsonNode mapping, String name) throws Exception {
+                             JsonNode mapping, String name, boolean coverage) throws Exception {
         JsonNode jsonRoot;
         try {
             jsonRoot = JSON.readTree(jsonPath.toFile());
@@ -127,6 +128,9 @@ public final class CompareJsonXml {
         }
 
         List<Row> rows = Engine.compareDocuments(jsonRoot, xmlRoot, mapping);
+        if (coverage) {
+            rows.addAll(Coverage.rows(jsonRoot, xmlRoot, mapping));
+        }
         Map<String, String> metadata = new LinkedHashMap<String, String>();
         metadata.put("name", name);
         metadata.put("json", jsonPath.toString());
@@ -251,6 +255,7 @@ public final class CompareJsonXml {
         String xmlExtension = ".xml";
         Path mapping = defaultMappingPath();
         boolean failOnProblems;
+        boolean coverage = true;
 
         static Cli parse(String[] args) {
             Cli cli = new Cli();
@@ -276,6 +281,8 @@ public final class CompareJsonXml {
                     cli.mapping = Paths.get(next(args, ++i, arg));
                 } else if ("--fail-on-problems".equals(arg)) {
                     cli.failOnProblems = true;
+                } else if ("--no-coverage".equals(arg)) {
+                    cli.coverage = false;
                 } else if ("-h".equals(arg) || "--help".equals(arg)) {
                     printHelp();
                     System.exit(0);
@@ -306,6 +313,8 @@ public final class CompareJsonXml {
             System.out.println("  --xml-extension EXT   default .xml");
             System.out.println("  --mapping FILE         mapping.yaml or .json");
             System.out.println("  --fail-on-problems    exit 1 if mismatches/missing/unmatched rows exist");
+            System.out.println("  --no-coverage         skip the sweep that lists JSON/XML values");
+            System.out.println("                        the mapping never reads");
         }
     }
 }

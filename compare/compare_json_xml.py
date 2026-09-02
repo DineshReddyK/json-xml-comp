@@ -33,6 +33,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -136,6 +137,8 @@ OPTIONAL_MISSING = "OPTIONAL_MISSING"
 ID_PAIR = "ID_PAIR"
 UNMATCHED_JSON_ROW = "UNMATCHED_JSON_ROW"
 UNMATCHED_XML_ROW = "UNMATCHED_XML_ROW"
+UNMAPPED_IN_JSON = "UNMAPPED_IN_JSON"
+UNMAPPED_IN_XML = "UNMAPPED_IN_XML"
 
 STATUS_ORDER = [
     MISMATCH,
@@ -147,6 +150,8 @@ STATUS_ORDER = [
     ID_PAIR,
     NORMALIZED_MATCH,
     MATCH,
+    UNMAPPED_IN_JSON,
+    UNMAPPED_IN_XML,
 ]
 
 # Statuses a reviewer has to act on, versus the ones that are already resolved.
@@ -158,6 +163,11 @@ PROBLEM_STATUSES = [
     UNMATCHED_XML_ROW,
 ]
 MATCHED_STATUSES = [MATCH, NORMALIZED_MATCH]
+
+# Coverage rows report data the mapping never looks at. They are informational:
+# no comparison happened, so they count as neither matched nor problems.
+COVERAGE_STATUSES = [UNMAPPED_IN_JSON, UNMAPPED_IN_XML]
+COVERAGE_GROUP = "Coverage"
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 FALSE_VALUES = {"0", "false", "no", "n", "off"}
@@ -446,6 +456,139 @@ def compare_documents(json_root: Any, xml_root: ET.Element, mapping: dict[str, A
 
 
 # =============================================================================
+# COVERAGE SWEEP
+# =============================================================================
+
+INDEX_STEP = re.compile(r"\[(?:\d+|\*)\]")
+
+
+def path_list(spec: Any) -> list[str]:
+    """Mapping paths accept either one path or a list of alternatives."""
+    if spec is None:
+        return []
+    return [path for path in (spec if isinstance(spec, list) else [spec]) if path]
+
+
+def mapped_json_paths(mapping: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """Return (subtree_roots, exact_paths) that the mapping reads from JSON.
+
+    A scalar field may point at an object, so anything below it counts as read.
+    Collection base paths are deliberately excluded: mapping a collection does
+    not mean every field inside its rows is compared.
+    """
+    subtrees: set[str] = set()
+    exact: set[str] = set()
+    for field in mapping.get("fields", []):
+        subtrees.update(INDEX_STEP.sub("[*]", path) for path in path_list(field.get("json")))
+    for collection in mapping.get("collections", []):
+        for base in path_list(collection.get("json")):
+            base = INDEX_STEP.sub("[*]", base)
+            base = base if base.endswith("[*]") else base + "[*]"
+            specs = [collection.get("join", {}).get("json")]
+            specs += [field.get("json") for field in collection.get("fields", [])]
+            for spec in specs:
+                for path in path_list(spec):
+                    exact.add(base + "." + INDEX_STEP.sub("[*]", path))
+    return subtrees, exact
+
+
+def mapped_xml_paths(mapping: dict[str, Any]) -> set[str]:
+    """Return the attribute and element paths the mapping reads from XML."""
+    paths: set[str] = set()
+    for field in mapping.get("fields", []):
+        paths.update(canonical_xml_path(path) for path in path_list(field.get("xml")))
+    for collection in mapping.get("collections", []):
+        for base in path_list(collection.get("xml")):
+            base = canonical_xml_path(base)
+            specs = [collection.get("join", {}).get("xml")]
+            specs += [field.get("xml") for field in collection.get("fields", [])]
+            for spec in specs:
+                for path in path_list(spec):
+                    paths.add(join_xml_path(base, canonical_xml_path(path)))
+    return paths
+
+
+def canonical_xml_path(path: str) -> str:
+    return path.lstrip("./")
+
+
+def join_xml_path(base: str, leaf: str) -> str:
+    if not base or base == ".":
+        return leaf
+    return base + "/" + leaf
+
+
+def json_leaves(node: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
+    """Yield (path, value) for every leaf, with real array indices in the path."""
+    if isinstance(node, dict) and node:
+        for key, value in node.items():
+            yield from json_leaves(value, f"{prefix}.{key}" if prefix else str(key))
+    elif isinstance(node, list) and node:
+        for index, value in enumerate(node):
+            yield from json_leaves(value, f"{prefix}[{index}]")
+    else:
+        # Empty containers are leaves too, otherwise they vanish from coverage.
+        yield prefix, node
+
+
+def xml_leaves(root: ET.Element) -> Iterator[tuple[str, Any]]:
+    """Yield (path, value) for every attribute and every element with text."""
+    stack: list[tuple[ET.Element, str]] = [(root, "")]
+    while stack:
+        element, prefix = stack.pop()
+        for name, value in element.attrib.items():
+            yield join_xml_path(prefix, "@" + name), value
+        text = (element.text or "").strip()
+        if text and prefix:
+            yield prefix, text
+        for child in reversed(list(element)):
+            stack.append((child, join_xml_path(prefix, child.tag)))
+
+
+def coverage_rows(json_root: Any, xml_root: ET.Element, mapping: dict[str, Any]) -> list[Row]:
+    """Report every JSON leaf and XML value that no mapping entry reads.
+
+    Repeats collapse onto one row per shape (array indices become [*]) so a
+    12-row collection with 6 undeclared fields yields 6 rows, not 72.
+    """
+    subtrees, exact = mapped_json_paths(mapping)
+    xml_paths = mapped_xml_paths(mapping)
+
+    def json_is_read(path: str) -> bool:
+        if path in exact or path in subtrees:
+            return True
+        return any(path.startswith(root + ".") or path.startswith(root + "[") for root in subtrees)
+
+    found: dict[tuple[str, str], list[Any]] = {}
+    for path, value in json_leaves(json_root):
+        shape = INDEX_STEP.sub("[*]", path)
+        if not json_is_read(shape):
+            found.setdefault((UNMAPPED_IN_JSON, shape), []).append(value)
+    for path, value in xml_leaves(xml_root):
+        if path not in xml_paths:
+            found.setdefault((UNMAPPED_IN_XML, path), []).append(value)
+
+    rows = []
+    for (status, path), values in sorted(found.items(), key=lambda item: (item[0][0], item[0][1])):
+        side = "JSON" if status == UNMAPPED_IN_JSON else "XML"
+        occurrences = "" if len(values) == 1 else f", {len(values)} occurrences"
+        rows.append(
+            Row(
+                group=COVERAGE_GROUP,
+                key="",
+                path=path,
+                status=status,
+                jsonValue=display(values[0]) if status == UNMAPPED_IN_JSON else "",
+                xmlMappedValue=display(values[0]) if status == UNMAPPED_IN_XML else "",
+                jsonPath=path if status == UNMAPPED_IN_JSON else "",
+                xmlPath=path if status == UNMAPPED_IN_XML else "",
+                detail=f"present in {side}, not declared in the mapping{occurrences}",
+            )
+        )
+    return rows
+
+
+# =============================================================================
 # REPORT
 # =============================================================================
 
@@ -459,6 +602,8 @@ STATUS_COLORS = {
     ID_PAIR: "#0891b2",
     UNMATCHED_JSON_ROW: "#db2777",
     UNMATCHED_XML_ROW: "#ea580c",
+    UNMAPPED_IN_JSON: "#4f46e5",
+    UNMAPPED_IN_XML: "#0284c7",
 }
 
 REPORT_CSS = """
@@ -495,12 +640,15 @@ border-radius:11px;padding:14px 16px}
 font:inherit;font-weight:600;padding:10px 2px;cursor:pointer;margin-bottom:-2px}
 .view:hover{color:#1f2937}
 .view.is-active{color:#3b6fd4;border-bottom-color:#3b6fd4}
+.view.is-active[data-view="compared"]{color:#3b6fd4;border-bottom-color:#3b6fd4}
 .view.is-active[data-view="matched"]{color:#15803d;border-bottom-color:#16a34a}
 .view.is-active[data-view="problems"]{color:#dc2626;border-bottom-color:#dc2626}
+.view.is-active[data-view="coverage"]{color:#4f46e5;border-bottom-color:#4f46e5}
 .view .dot{display:inline-block;width:8px;height:8px;border-radius:50%;
 margin-right:7px;background:#3b6fd4}
 .view[data-view="matched"] .dot{background:#16a34a}
 .view[data-view="problems"] .dot{background:#dc2626}
+.view[data-view="coverage"] .dot{background:#4f46e5}
 .toolbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:12px 0}
 .toolbar input,.toolbar button{font:inherit;border:1px solid #d3d9e8;background:#fff;
 color:#1f2937;border-radius:8px;padding:9px 12px}
@@ -519,6 +667,7 @@ border:1px solid #dfe3ee;border-left:4px solid var(--tone);border-radius:9px;pad
 .notice{border-radius:9px;padding:11px 14px;font-size:12.5px;margin:14px 0;border:1px solid}
 .notice.warn{background:#fff8e6;border-color:#f3d99b;color:#8a5a00}
 .notice.ok{background:#eafaf0;border-color:#b7e6c9;color:#166534}
+.notice.info{background:#eef0ff;border-color:#c7cbf7;color:#3730a3}
 .rows-title{color:#15803d;font-size:15px;margin:18px 0 9px;padding-bottom:7px;
 border-bottom:2px solid #16a34a}
 .wrap{background:#fff;border:1px solid #dfe3ee;border-radius:11px;overflow:auto;
@@ -545,7 +694,9 @@ const ALL=chips.map(c=>c.dataset.status);
 const MATCHED=["MATCH","NORMALIZED_MATCH"];
 const PROBLEMS=["MISMATCH","MISSING_IN_JSON","MISSING_IN_XML",
   "UNMATCHED_JSON_ROW","UNMATCHED_XML_ROW"];
-const active=new Set(ALL);
+const COVERAGE=["UNMAPPED_IN_JSON","UNMAPPED_IN_XML"];
+const COMPARED=ALL.filter(s=>!COVERAGE.includes(s));
+const active=new Set(COMPARED);
 const search=document.querySelector("#q");
 let group="*";
 function apply(){
@@ -577,14 +728,15 @@ document.querySelectorAll(".view").forEach(view=>view.onclick=()=>{
   document.querySelectorAll(".view").forEach(v=>v.classList.remove("is-active"));
   view.classList.add("is-active");
   const mode=view.dataset.view;
-  setStatuses(mode==="matched"?MATCHED:mode==="problems"?PROBLEMS:ALL);
+  setStatuses(mode==="matched"?MATCHED:mode==="problems"?PROBLEMS
+    :mode==="coverage"?COVERAGE:COMPARED);
 });
 search.oninput=apply;
 document.querySelector("#reset").onclick=()=>{
   search.value="";group="*";
   document.querySelectorAll(".tab").forEach((t,i)=>t.classList.toggle("is-active",i===0));
   document.querySelectorAll(".view").forEach((v,i)=>v.classList.toggle("is-active",i===0));
-  setStatuses(ALL);
+  setStatuses(COMPARED);
 };
 document.querySelector("#csv").onclick=()=>{
   const header=["group","key","path","status","jsonValue","xmlMappedValue",
@@ -631,14 +783,18 @@ def write_html_report(rows: list[Row], path: Path, metadata: dict[str, Any]) -> 
     total = len(rows)
     matched = sum(counts.get(status, 0) for status in MATCHED_STATUSES)
     problems = sum(counts.get(status, 0) for status in PROBLEM_STATUSES)
-    rate = (100.0 * matched / total) if total else 0.0
+    unmapped = sum(counts.get(status, 0) for status in COVERAGE_STATUSES)
+    compared = total - unmapped
+    rate = (100.0 * matched / compared) if compared else 0.0
 
     stats = [
-        ("Total Comparisons", str(total)),
+        ("Comparisons", str(compared)),
         ("Matched", str(matched)),
         ("Needs Attention", str(problems)),
         ("Match Rate", "%.1f%%" % rate),
     ]
+    if unmapped:
+        stats.append(("Unmapped Fields", str(unmapped)))
     stat_cards = "".join(
         f'<div class="stat"><span class="label">{html.escape(label)}</span>'
         f'<span class="num">{html.escape(value)}</span></div>'
@@ -659,13 +815,18 @@ def write_html_report(rows: list[Row], path: Path, metadata: dict[str, Any]) -> 
     )
 
     views = (
-        f'<button class="view is-active" data-view="all"><i class="dot"></i>'
-        f"All Rows ({total})</button>"
+        f'<button class="view is-active" data-view="compared"><i class="dot"></i>'
+        f"Compared ({compared})</button>"
         f'<button class="view" data-view="matched"><i class="dot"></i>'
         f"Matched ({matched})</button>"
         f'<button class="view" data-view="problems"><i class="dot"></i>'
         f"Needs Attention ({problems})</button>"
     )
+    if unmapped:
+        views += (
+            f'<button class="view" data-view="coverage"><i class="dot"></i>'
+            f"Unmapped ({unmapped})</button>"
+        )
 
     if problems:
         breakdown = ", ".join(
@@ -675,13 +836,20 @@ def write_html_report(rows: list[Row], path: Path, metadata: dict[str, Any]) -> 
         )
         notice = (
             '<div class="notice warn"><b>Attention:</b> '
-            f"{problems} of {total} comparisons need review ({breakdown}). "
+            f"{problems} of {compared} comparisons need review ({breakdown}). "
             "Use the group tabs or status filters below to drill in.</div>"
         )
     else:
         notice = (
             '<div class="notice ok"><b>Clean run:</b> no mismatches and no '
             "unmatched rows across all mapped comparisons.</div>"
+        )
+    if unmapped:
+        notice += (
+            '<div class="notice info"><b>Coverage:</b> '
+            f"{counts.get(UNMAPPED_IN_JSON, 0)} JSON path(s) and "
+            f"{counts.get(UNMAPPED_IN_XML, 0)} XML path(s) are not declared in the mapping, "
+            "so they were never compared. See the Coverage group.</div>"
         )
 
     body = []
@@ -699,6 +867,7 @@ def write_html_report(rows: list[Row], path: Path, metadata: dict[str, Any]) -> 
                 row.detail,
             ],
             ensure_ascii=False,
+            separators=(",", ":"),
         )
         haystack = " ".join(json.loads(raw)).casefold()
         color = STATUS_COLORS[row.status]
@@ -732,7 +901,8 @@ def write_html_report(rows: list[Row], path: Path, metadata: dict[str, Any]) -> 
   <h1>JSON &#8596; XML Validation Report</h1>
   <div class="sub">Generated on {html.escape(metadata["generated"])}</div>
   <div class="meta">Mapping: {html.escape(metadata["mapping"])}
-    &nbsp;|&nbsp; {total} mapped comparisons</div>
+    &nbsp;|&nbsp; {compared} mapped comparisons
+    {f"&nbsp;|&nbsp; {unmapped} undeclared paths" if unmapped else ""}</div>
 </header>
 <nav class="tabs">{tabs}</nav>
 <section class="panel">
@@ -772,6 +942,7 @@ def run_pair(
     output_html: Path,
     mapping: dict[str, Any],
     name: str,
+    coverage: bool = True,
 ) -> tuple[list[Row], dict[str, Any]]:
     try:
         with json_path.open(encoding="utf-8") as handle:
@@ -788,6 +959,8 @@ def run_pair(
 
     normalize_xml_names(xml_root)
     rows = compare_documents(json_root, xml_root, mapping)
+    if coverage:
+        rows += coverage_rows(json_root, xml_root, mapping)
     metadata = {
         "name": name,
         "json": str(json_path),
@@ -986,6 +1159,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="return exit code 1 for mismatch/missing/unmatched rows",
     )
+    parser.add_argument(
+        "--no-coverage",
+        dest="coverage",
+        action="store_false",
+        help="skip the sweep that lists JSON/XML values the mapping never reads",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1009,13 +1188,15 @@ def main(argv: list[str] | None = None) -> int:
         has_problems = False
         for json_path, xml_path, name in pairs:
             output = args.out_dir / f"{name}.html" if batch else args.out
-            rows, _ = run_pair(json_path, xml_path, output, mapping, name)
+            rows, _ = run_pair(json_path, xml_path, output, mapping, name, args.coverage)
             counts = Counter(row.status for row in rows)
             problem_count = sum(counts.get(status, 0) for status in PROBLEM_STATUSES)
+            unmapped = sum(counts.get(status, 0) for status in COVERAGE_STATUSES)
             has_problems |= problem_count > 0
             print(
-                f"{name}: {len(rows)} comparisons, "
-                f"{counts.get(MISMATCH, 0)} mismatches, {problem_count} problems -> {output}"
+                f"{name}: {len(rows) - unmapped} comparisons, "
+                f"{counts.get(MISMATCH, 0)} mismatches, {problem_count} problems, "
+                f"{unmapped} unmapped -> {output}"
             )
             batch_results.append(
                 {

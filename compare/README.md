@@ -51,6 +51,21 @@ Each run writes `report.html`, `report.csv`, and `report.json`. Columns:
 `path`, `status`, `jsonValue`, `xmlMappedValue`, plus resolved paths and a
 status reason.
 
+## Coverage sweep
+
+Only fields declared in `mapping.yaml` are compared, so an undeclared field is
+invisible: it produces no row at all, not a `MISSING_IN_XML` row. After the
+mapped comparisons, the coverage sweep walks both documents and reports every
+JSON leaf and XML attribute/element that no mapping entry reads:
+
+- `UNMAPPED_IN_JSON` — present in JSON, never compared
+- `UNMAPPED_IN_XML` — present in XML, never compared
+
+These rows land in the `Coverage` group and are informational, so they do not
+count toward the match rate and never trip `--fail-on-problems`. Repeats
+collapse onto one row per shape: array indices become `[*]`, and the detail
+column notes the occurrence count. Pass `--no-coverage` to skip the sweep.
+
 ## Run (Java)
 
 No system Maven needed. `build.sh` fetches a JDK into `/tmp` if `javac` is missing, then builds a fat jar:
@@ -66,8 +81,9 @@ java -jar target/json-xml-compare.jar \
 ```
 
 Same flags as the Python script: `--batch-dir`, `--manifest`, `--out-dir`,
-`--fail-on-problems`. If `--mapping` is omitted, the jar walks up from its
-location until it finds `mapping.yaml`.
+`--fail-on-problems`, `--no-coverage`. If `--mapping` is omitted, the jar walks
+up from its location until it finds `mapping.yaml`. Output is byte-identical to
+the Python run for the same inputs.
 
 ## Mapping
 
