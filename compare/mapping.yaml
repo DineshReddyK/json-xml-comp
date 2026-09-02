@@ -1,0 +1,356 @@
+# Mapping between the deal JSON and the ideal_security_master XML.
+#
+# Loaded by compare_json_xml.py. Nothing about either schema is hard-coded in
+# the script, so a new document type only needs a new mapping file:
+#     python compare_json_xml.py --json a.json --xml b.xml --mapping other.yaml
+#
+# Scalar field (under `fields:`)
+#   group     : section heading in the report
+#   path      : label shown in the report
+#   json      : JSON path, or a list of fallback paths (first present wins)
+#   xml       : XML path, or a list of fallbacks; @name selects an attribute
+#   type      : string (default) | number | bool | date | datetime | id | exists
+#   enum      : name of a table under `enums:` (JSON value -> XML value)
+#   tolerance : numeric tolerance, default 0
+#   ignore_case / ignore_whitespace : string normalisation before comparing
+#   optional_json / optional_xml    : report absence as OPTIONAL_MISSING
+#                                     instead of MISSING_IN_JSON / MISSING_IN_XML
+#
+# Collection (under `collections:`)
+#   json / xml : select the repeating objects / elements
+#   join       : the business key on each side. Rows are never joined by array
+#                position, because valid files may order children differently.
+#   key_label  : what the join key is called in the report
+#   fields     : same options as above, with paths relative to the row
+#
+# Path syntax
+#   JSON : a.b[0].c   a[*].c
+#   XML  : deal/@issue_id   //maturity/@cusip   @coupon   series/money/refunding
+
+name: ideal_deal_strict_v1
+enums:
+  tax_status:
+    Exempt: '0'
+    Taxable: '1'
+  deal_status:
+    Active: act
+    Inactive: inact
+    Cancelled: can
+  order_type:
+    Both: B
+    Retail: R
+    Institutional: I
+    Member: MEM
+  coupon_type:
+    Fixed: FXR
+    Floating: FLT
+    Variable: VAR
+    ZeroCoupon: ZER
+  coupon_frequency:
+    SemiAnnually: S
+    Annually: A
+    Quarterly: Q
+    Monthly: M
+  call_type:
+    Callable: C
+    NonCallable: N
+    MakeWhole: M
+  rating_status:
+    Rated: R
+    NotRated: NR
+    Withdrawn: W
+  repayment:
+    LimitedTaxGO: LTG
+    UnlimitedTaxGO: UTG
+    Revenue: REV
+    GeneralObligation: GO
+  management_type:
+    SoleManaged: SM
+    JointManaged: JM
+    Syndicated: SYN
+  security_type:
+    BOND: Bond
+    NOTE: Note
+    COP: Cop
+  deal_type:
+    Negotiated: Neg
+    Competitive: Comp
+    Municipal: Neg
+  wire_type:
+    Expected: PREL PRICING
+    Priced: FINAL PRICING
+    Cancelled: CANCEL
+fields:
+- group: Deal
+  path: deal.id
+  json: id
+  xml: deal/@issue_id
+  type: id
+- group: Deal
+  path: deal.globalId
+  json: globalId
+  xml: series_list/series/@global_issue_id
+  ignore_case: true
+- group: Deal
+  path: deal.description
+  json:
+  - description
+  - name
+  xml: deal/@desc_txt
+  ignore_whitespace: true
+- group: Deal
+  path: deal.issuerName
+  json: issuerName
+  xml: deal/@issuer_name
+  optional_json: true
+- group: Deal
+  path: deal.amount
+  json: amount
+  xml: deal/@issue_size
+  type: number
+  tolerance: 0.001
+- group: Deal
+  path: deal.currency
+  json: currency
+  xml: deal/@currency_cd
+  optional_xml: true
+- group: Deal
+  path: deal.dealType
+  json: dealType
+  xml: deal/@deal_type_cd
+  enum: deal_type
+- group: Deal
+  path: deal.status
+  json: dealStatus
+  xml: deal/@deal_status
+  enum: deal_status
+- group: Deal
+  path: deal.managementType
+  json: managementType
+  xml: deal/@role
+  enum: management_type
+- group: Deal
+  path: deal.pricingStatus
+  json: pricingStatus
+  xml: deal/@wire_type_cd
+  enum: wire_type
+- group: Deal
+  path: deal.isBankQualified
+  json: isBankQualified
+  xml: deal/@bank_qualified_ind
+  type: bool
+- group: Deal
+  path: deal.expectedPricingDate
+  json: expectedPricingDate.date
+  xml: deal/@expected_pricing_dt
+  type: date
+- group: Deal
+  path: deal.saleDate
+  json: saleDate.date
+  xml: deal/@sale_dt
+  type: date
+  optional_xml: true
+- group: Deal
+  path: deal.timezone
+  json: prevailingTimezone
+  xml: deal/@prevailing_timezone_cd
+  optional_json: true
+- group: Deal
+  path: deal.leadManager
+  json: syndicate[0].shortName
+  xml: deal/@smgr_name
+- group: Order period
+  path: orderPeriod.startDate
+  json: orderPeriod.startDate
+  xml: order_period/@new_begin_utc_dttm
+  type: datetime
+- group: Order period
+  path: orderPeriod.endDate
+  json: orderPeriod.endDate
+  xml: order_period/@new_end_utc_dttm
+  type: datetime
+- group: Order period
+  path: orderPeriod.type
+  json: orderPeriod.type
+  xml: order_period/@new_order_type_cd
+  enum: order_type
+- group: Order period
+  path: orderPeriod.orderType
+  json: orderPeriod.orderTypes[0].orderType
+  xml: order_period/order_types/order_type/@order_type_cd
+- group: Order period
+  path: orderPeriod.priority
+  json: orderPeriod.orderTypes[0].priority
+  xml: order_period/order_types/order_type/@order_type_order
+  type: number
+- group: Call feature
+  path: callFeature.securityType
+  json: series[0].callFeatures[0].securityType
+  xml: call_features/call_feature/@security_type_cd
+- group: Call feature
+  path: callFeature.callType
+  json: series[0].callFeatures[0].callFeature.callType
+  xml: call_features/call_feature/@call_feature_type_cd
+  enum: call_type
+- group: Call feature
+  path: callFeature.firstCallDate
+  json: series[0].callFeatures[0].callFeature.firstCallDate
+  xml: call_features/call_feature/@first_call_dt
+  type: date
+- group: Call feature
+  path: callFeature.firstCallPrice
+  json: series[0].callFeatures[0].callFeature.firstCallPrice
+  xml: call_features/call_feature/@first_call_price
+  type: number
+  tolerance: 0.0001
+  optional_json: true
+collections:
+- name: Series
+  json: series[*]
+  xml: series_list/series
+  join:
+    json: name
+    xml: '@series_cd'
+  key_label: series
+  fields:
+  - path: amount
+    json: amount
+    xml: '@series_size'
+    type: number
+  - path: state
+    json: state
+    xml: '@state_cd'
+  - path: taxStatus
+    json: taxStatus
+    xml: '@taxable_ind'
+    enum: tax_status
+  - path: sourceOfRepayment
+    json: sourceOfRepayment
+    xml: '@revgo_cd'
+    enum: repayment
+  - path: firstCouponDate
+    json: firstCouponDate
+    xml: '@first_coupon_dt'
+    type: date
+  - path: datedDate
+    json: datedDate
+    xml: '@dated_dt'
+    type: date
+  - path: deliveryDate
+    json: deliveryDate
+    xml: '@delivery_dt'
+    type: date
+  - path: settleDate
+    json: settleDate
+    xml: '@settle_dt'
+    type: date
+  - path: coupon.type
+    json: coupon.type
+    xml: '@interest_type_cd'
+    enum: coupon_type
+  - path: coupon.frequency
+    json: coupon.frequency
+    xml: '@coupon_freq_cd'
+    enum: coupon_frequency
+  - path: forwardDelivery
+    json: forwardDelivery
+    xml: '@forward_issue_ind'
+    type: bool
+  - path: extraordinaryCall
+    json: extraordinaryCall
+    xml: '@extraordinary_call_ind'
+    type: bool
+  - path: rating.sp
+    json: ratings[0].longTerm
+    xml: '@sp_rating_cd'
+  - path: rating.status
+    json: ratings[0].status
+    xml: '@sp_rating_status_cd'
+    enum: rating_status
+- name: Tranches
+  json: tranches[*]
+  xml: maturities/maturity
+  join:
+    json: name
+    xml: '@maturity_id'
+  key_label: maturityId
+  fields:
+  - path: quantity
+    json: quantity
+    xml: '@number_bonds'
+    type: number
+    tolerance: 1.0e-05
+  - path: notReoffered
+    json: notReoffered
+    xml: '@nro_ind'
+    type: bool
+  - path: soldNotAvailable
+    json: soldNotAvailable
+    xml: '@sna_ind'
+    type: bool
+  - path: notRetail
+    json: notRetail
+    xml: '@no_retail_ind'
+    type: bool
+  - path: sealedBid
+    json: sealedBid
+    xml: '@sealed_bid_ind'
+    type: bool
+  - path: orderPeriodTerminated
+    json: orderPeriodTerminated
+    xml: '@op_partial_ind'
+    type: bool
+  - path: status
+    json: status
+    xml: '@active_ind'
+    optional_xml: true
+- name: Products
+  json: products[*]
+  xml: maturities/maturity
+  join:
+    json: name
+    xml: '@maturity_id'
+  key_label: maturityId
+  fields:
+  - path: maturityDate
+    json: maturityDate
+    xml: '@maturity_dt'
+    type: date
+  - path: price
+    json: price
+    xml:
+    - '@or_computed_price_yield'
+    - '@list_price'
+    type: number
+    tolerance: 0.001
+  - path: yield
+    json: yield
+    xml:
+    - '@list_price'
+    - '@ptc_yield_to_maturity'
+    type: number
+    tolerance: 0.001
+  - path: coupon.rate
+    json: coupon.fixedRate
+    xml: '@coupon'
+    type: number
+    tolerance: 0.001
+  - path: coupon.type
+    json: coupon.type
+    xml: '@interest_type_cd'
+    enum: coupon_type
+    optional_xml: true
+  - path: securityType
+    json: securityType
+    xml: '@security_type_cd'
+  - path: cusip
+    json: cusip
+    xml: '@cusip'
+  - path: takedown
+    json: takedown
+    xml: '@addl_takedown'
+    type: number
+    tolerance: 0.0001
+  - path: dayCount
+    json: dayCountConvention
+    xml: '@day_count_cd'
