@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<diagrams project="json-xml-compare" language="java">
+  <!--
+    Open in any Mermaid renderer (GitHub, mermaid.live, IntelliJ, VS Code).
+    Copy the text inside each <code> CDATA block.
+  -->
+
+  <flowchart id="java-arch" title="JSON XML compare architecture">
+    <code><![CDATA[
+flowchart TB
+  subgraph IN["inputs"]
+    J[deal.json]
+    X[deal.xml]
+    M[mapping.yaml]
+    CLI["CompareJsonXml.java run()"]
+  end
+
+  CLI --> Pairs["JSON/XML pairs\n--json/--xml | --batch-dir | --manifest"]
+  M --> MapL["MappingLoader.java"]
+  Pairs --> Pair["CompareJsonXml.java runPair()"]
+  MapL --> Pair
+
+  Pair --> ParseJ["ObjectMapper.readTree\ndeal.json"]
+  Pair --> ParseX["DocumentBuilder.parse\ndeal.xml"]
+
+  ParseJ --> TreeJ[JsonNode jsonRoot]
+  ParseX --> TreeX[Element xmlRoot]
+  TreeJ --> Eng[Engine.java compareDocuments]
+  TreeX --> Eng
+  MapL --> Eng
+
+  subgraph ENG["Engine.java"]
+    Paths[Paths.java]
+    F["fields[]: jsonValue / xmlValue + compare"]
+    C["collections[]: join on business key"]
+    F --> Rows["List of Row.java"]
+    C --> Rows
+    Paths --> F
+    Paths --> C
+  end
+
+  Eng --> F
+  Eng --> C
+
+  Rows --> Rpt[Reports.java writeAll]
+  Rpt --> HTML[report.html]
+  Rpt --> CSV[report.csv]
+  Rpt --> JSON[report.json]
+  Rpt -.-> IDX["batch: index.html"]
+    ]]></code>
+  </flowchart>
+
+  <sequence id="java-sequence" title="JSON XML compare sequence">
+    <code><![CDATA[
+sequenceDiagram
+  autonumber
+  actor User
+  participant CLI as CompareJsonXml.java<br/>run()
+  participant MapL as MappingLoader.java
+  participant MapF as mapping.yaml
+  participant JSON as deal.json
+  participant XML as deal.xml
+  participant Pair as CompareJsonXml.java<br/>runPair()
+  participant Eng as Engine.java
+  participant Paths as Paths.java
+  participant St as Status.java
+  participant Row as Row.java
+  participant Rpt as Reports.java
+
+  User->>CLI: java -jar json-xml-compare.jar<br/>--json deal.json --xml deal.xml<br/>--mapping mapping.yaml --out report.html
+
+  CLI->>CLI: Cli.parse()  (or batch-dir / manifest CSV)
+  CLI->>MapL: MappingLoader.load(mapping.yaml)
+  MapL->>MapF: Files.readAllBytes + SnakeYAML
+  MapF-->>MapL: JsonNode
+  MapL->>MapL: validate()
+  MapL-->>CLI: mapping
+
+  CLI->>Pair: runPair(json, xml, out, mapping, name)
+
+  Pair->>JSON: ObjectMapper.readTree()
+  JSON-->>Pair: JsonNode jsonRoot
+  Pair->>XML: DocumentBuilder.parse()
+  XML-->>Pair: Element xmlRoot
+
+  Pair->>Eng: Engine.compareDocuments(jsonRoot, xmlRoot, mapping)
+
+  loop mapping.fields[]
+    Eng->>Paths: Paths.jsonValue(jsonRoot, field.json)
+    Paths-->>Eng: jsonData, usedJsonPath
+    Eng->>Paths: Paths.xmlValue(xmlRoot, field.xml)
+    Paths-->>Eng: xmlData, usedXmlPath
+    Eng->>Eng: Engine.compare(field, json, xml, enums)
+    Note over Eng,St: type / enum / tolerance<br/>MATCH MISMATCH MISSING_* ID_PAIR
+    Eng->>Row: new Row(...)
+  end
+
+  loop mapping.collections[]
+    Eng->>Paths: Paths.jsonValues(collection.json)
+    Eng->>Paths: Paths.xmlElements(collection.xml)
+    Note over Eng: index by join.json / join.xml<br/>never by array position
+    alt key only on one side
+      Eng->>Row: UNMATCHED_JSON_ROW / UNMATCHED_XML_ROW
+    else keys match
+      Eng->>Row: MATCH joined
+      loop collection.fields[]
+        Eng->>Paths: extract relative to row
+        Eng->>Eng: Engine.compare(...)
+        Eng->>Row: new Row(...)
+      end
+    end
+  end
+
+  Eng-->>Pair: List of Row
+
+  Pair->>Rpt: Reports.writeAll(rows, report.html, metadata)
+  Rpt-->>User: report.html
+  Rpt-->>User: report.csv
+  Rpt-->>User: report.json
+
+  opt --batch-dir or --manifest
+    CLI->>Rpt: Reports.writeBatchIndex()
+    Rpt-->>User: out-dir/index.html
+  end
+    ]]></code>
+  </sequence>
+</diagrams>
