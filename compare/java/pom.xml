@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project>
   <modelVersion>4.0.0</modelVersion>
   <groupId>compare</groupId>
   <artifactId>json-xml-compare</artifactId>
   <version>1.0.0</version>
-  <name>JSON XML Compare</version>
-  <description>Port of compare_json_xml.py — valid JSON vs XML via mapping.yaml</description>
+  <name>JSON XML Compare</name>
+  <description>Port of compare_json_xml.py: valid JSON vs XML via mapping.yaml</description>
+  <packaging>jar</packaging>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -29,17 +28,15 @@
   </dependencies>
 
   <build>
+    <finalName>json-xml-compare</finalName>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-jar-plugin</artifactId>
-        <version>3.3.0</version>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.11.0</version>
         <configuration>
-          <archive>
-            <manifest>
-              <mainClass>compare.CompareJsonXml</mainClass>
-            </manifest>
-          </archive>
+          <source>1.8</source>
+          <target>1.8</target>
         </configuration>
       </plugin>
       <plugin>
@@ -48,8 +45,11 @@
         <version>3.5.0</version>
         <executions>
           <execution>
+            <id>shade-jar</id>
             <phase>package</phase>
-            <goals><goal>shade</goal></goals>
+            <goals>
+              <goal>shade</goal>
+            </goals>
             <configuration>
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
@@ -57,7 +57,6 @@
                   <mainClass>compare.CompareJsonXml</mainClass>
                 </transformer>
               </transformers>
-              <finalName>json-xml-compare</finalName>
             </configuration>
           </execution>
         </executions>
